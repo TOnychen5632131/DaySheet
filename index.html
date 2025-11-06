@@ -37,6 +37,11 @@
     .btn.tiny{padding:4px 6px;font-size:12px}
     .order-remark{color:#4b5563;font-size:13px}
     .order-remark.muted{color:#9ca3af}
+    .order-tags{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px}
+    .order-tag{border:1px solid #d1d5db;background:#f9fafb;color:#111827;padding:4px 12px;border-radius:999px;font-size:12px;cursor:pointer;transition:all .15s}
+    .order-tag .count{margin-left:6px;opacity:.8}
+    .order-tag.active{background:#0a7cff;border-color:#0a7cff;color:#fff}
+    .order-tag.active .count{opacity:1}
     @media (max-width:640px){
       body{padding:12px}
       .card{padding:12px}
@@ -60,19 +65,20 @@
       <select id="orderSelect"></select>
       <button class="btn" type="button" id="newOrder">+ 新建序号</button>
     </div>
-    <label>备注（选填，当前序号）</label>
-    <input id="orderRemark" placeholder="例如：加辣 / 不要香菜" />
+    <div class="order-tags" id="orderTags"></div>
     <label>菜名（可选择或自行输入）</label>
-    <input list="presetItems" id="itemName" placeholder="例如：不辣三拼或自定义菜名" />
+    <input list="presetItems" id="itemName" placeholder="例如：不辣套餐或自定义菜名" />
     <datalist id="presetItems">
-      <option value="不辣三拼" data-price="15.99">不辣三拼（15.99）</option>
-      <option value="辣三拼" data-price="15.99">辣三拼（15.99）</option>
+      <option value="不辣套餐" data-price="15.99">不辣套餐（15.99）</option>
+      <option value="辣套餐" data-price="15.99">辣套餐（15.99）</option>
       <option value="水煮鱼套餐" data-price="18.99">水煮鱼套餐（18.99）</option>
     </datalist>
     <label>单价（USD 税后）</label>
     <input id="itemPrice" type="number" step="0.01" />
     <label>数量</label>
     <input id="itemQty" type="number" min="1" value="1" />
+    <label>备注（选填，当前序号）</label>
+    <input id="orderRemark" placeholder="例如：加辣 / 不要香菜" />
     <button class="btn primary" id="addItem">+ 添加</button>
   </div>
   <div class="card">
@@ -114,9 +120,30 @@
     let orderSeq=1;
     const COMMISSION_RATE=0.15;
     const $=s=>document.querySelector(s);
+    const orderTagsContainer=document.getElementById('orderTags');
     const fmtDate=d=>`${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}-${d.getFullYear()}`;
     const displayDate=()=>new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
     const escapeHTML=str=>str.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    function wrapText(ctx,text,font,maxWidth){
+      const lines=[];
+      const segments=String(text).split('\n');
+      segments.forEach(segment=>{
+        if(segment===''){ lines.push(''); return; }
+        ctx.font=font;
+        let current='';
+        for(const ch of segment){
+          const test=current+ch;
+          if(ctx.measureText(test).width<=maxWidth || current.length===0){
+            current=test;
+          }else{
+            lines.push(current);
+            current=ch;
+          }
+        }
+        if(current) lines.push(current);
+      });
+      return lines.length?lines:[''];
+    }
 
     function initDateMeta(){
       const dateStr=displayDate();
@@ -142,19 +169,35 @@
       return findOrderById(select.value);
     }
 
-    function populateOrderSelect(preferredId){
+    function renderOrderTags(activeId){
+      if(!orderTagsContainer)return;
+      if(!orders.length){
+        orderTagsContainer.innerHTML='';
+        return;
+      }
+      orderTagsContainer.innerHTML=orders.map(order=>{
+        const count=order.items.reduce((sum,item)=>sum+item.qty,0);
+        const activeClass=order.id===activeId?' active':'';
+        const countText=count?`<span class="count">×${count}</span>`:'';
+        return `<button type="button" class="order-tag${activeClass}" data-order="${order.id}">#${order.id}${countText}</button>`;
+      }).join('');
+    }
+
+    function setActiveOrder(preferredId){
       const select=$('#orderSelect');
       if(!select)return;
       select.innerHTML=orders.map(order=>`<option value="${order.id}">序号 ${order.id}</option>`).join('');
       if(!orders.length){
         select.value='';
         $('#orderRemark').value='';
+        renderOrderTags(null);
         return;
       }
       const fallback=orders[orders.length-1].id;
       const targetId=orders.some(order=>order.id===preferredId)?preferredId:fallback;
       select.value=String(targetId);
       syncRemarkInput();
+      renderOrderTags(targetId);
     }
 
     function syncRemarkInput(){
@@ -209,6 +252,14 @@
       return results;
     }
 
+    function autoAdvanceSequence(currentOrder){
+      let nextOrder=orders.find(order=>order.id>currentOrder.id && order.items.length===0);
+      if(!nextOrder){
+        nextOrder=createOrder();
+      }
+      setActiveOrder(nextOrder.id);
+    }
+
     $('#presetItems').addEventListener('change',()=>{
       const val=$('#itemName').value.trim();
       const opt=[...$('#presetItems').options].find(option=>option.value===val);
@@ -246,6 +297,9 @@
         body.appendChild(tr);
       });
       $('#grandTotal').textContent=`$${total.toFixed(2)}`;
+      const select=$('#orderSelect');
+      const activeId=select&&select.value?Number(select.value):null;
+      renderOrderTags(Number.isFinite(activeId)?activeId:null);
       updateSummary(total);
     }
 
@@ -266,10 +320,10 @@
           orders.splice(idx,1);
           if(!orders.length){
             const order=createOrder();
-            populateOrderSelect(order.id);
+            setActiveOrder(order.id);
           }else{
             const nextOrder=orders[Math.min(idx,orders.length-1)];
-            populateOrderSelect(nextOrder.id);
+            setActiveOrder(nextOrder.id);
           }
           render();
         }
@@ -287,18 +341,22 @@
       $('#itemName').value='';
       $('#itemPrice').value='';
       $('#itemQty').value=1;
+      autoAdvanceSequence(order);
       render();
+      $('#itemName').focus();
     };
 
     $('#newOrder').addEventListener('click',()=>{
       const order=createOrder();
-      populateOrderSelect(order.id);
+      setActiveOrder(order.id);
       $('#orderRemark').focus();
       render();
     });
 
-    $('#orderSelect').addEventListener('change',()=>{
+    $('#orderSelect').addEventListener('change',e=>{
       syncRemarkInput();
+      const selectedId=Number(e.target.value)||null;
+      renderOrderTags(Number.isFinite(selectedId)?selectedId:null);
     });
 
     $('#orderRemark').addEventListener('input',e=>{
@@ -310,12 +368,23 @@
       }
     });
 
+    if(orderTagsContainer){
+      orderTagsContainer.addEventListener('click',e=>{
+        const tag=e.target.closest('.order-tag');
+        if(!tag)return;
+        const orderId=Number(tag.dataset.order);
+        if(!Number.isFinite(orderId))return;
+        setActiveOrder(orderId);
+        render();
+      });
+    }
+
     $('#clearAll').onclick=()=>{
       if(!confirm('确定清空全部序号与菜品？'))return;
       orders.length=0;
       orderSeq=1;
       const order=createOrder();
-      populateOrderSelect(order.id);
+      setActiveOrder(order.id);
       render();
     };
 
@@ -429,76 +498,89 @@ display dialog "已创建 ${tasks.length} 条提醒到【${esc(listName)}】" bu
       URL.revokeObjectURL(a.href);
     }
 
-    function printInvoice(){
-      const tasks=buildSequenceTasks();
-      if(!tasks.length){ alert('暂无菜品'); return; }
+    function downloadInvoiceImage(){
+      const activeOrders=orders.filter(order=>order.items.length);
+      if(!activeOrders.length){ alert('暂无菜品'); return; }
       const dateStr=displayDate();
       const summaryStr=getSummaryString();
-      const rows=orders.map(order=>{
-        if(!order.items.length)return '';
+      const width=1080;
+      const paddingX=80;
+      const paddingY=100;
+      const maxTextWidth=width-paddingX*2;
+      const styles={
+        header:{font:'600 48px "PingFang SC","Microsoft YaHei",sans-serif',color:'#111827',lineHeight:60},
+        meta:{font:'400 34px "PingFang SC","Microsoft YaHei",sans-serif',color:'#4b5563',lineHeight:44},
+        orderTitle:{font:'600 36px "PingFang SC","Microsoft YaHei",sans-serif',color:'#111827',lineHeight:48},
+        item:{font:'400 32px "PingFang SC","Microsoft YaHei",sans-serif',color:'#1f2937',lineHeight:42},
+        remark:{font:'400 32px "PingFang SC","Microsoft YaHei",sans-serif',color:'#6b7280',lineHeight:42},
+        total:{font:'600 40px "PingFang SC","Microsoft YaHei",sans-serif',color:'#111827',lineHeight:52}
+      };
+      const measureCanvas=document.createElement('canvas');
+      const measureCtx=measureCanvas.getContext('2d');
+      const lines=[];
+      let contentHeight=0;
+      const addText=(text,style)=>{
+        if(!text)return;
+        const wrapped=wrapText(measureCtx,text,style.font,maxTextWidth);
+        wrapped.forEach(part=>{
+          lines.push({type:'text',text:part,style});
+          contentHeight+=style.lineHeight;
+        });
+      };
+      const addSpace=value=>{
+        lines.push({type:'space',amount:value});
+        contentHeight+=value;
+      };
+      addText('🧾 外卖发票',styles.header);
+      addSpace(16);
+      addText(`开票日期：${dateStr}`,styles.meta);
+      if(summaryStr)addText(`汇总：${summaryStr}`,styles.meta);
+      addSpace(28);
+      let totalAmount=0;
+      activeOrders.forEach(order=>{
         const {quantity,amount}=getOrderTotals(order);
-        const detail=order.items.map(item=>`${escapeHTML(item.name)} ×${item.qty} · $${item.price.toFixed(2)}`).join('<br>');
-        const remark=order.remark?escapeHTML(order.remark):'—';
-        return `<tr><td>${order.id}</td><td>${detail}</td><td>${remark}</td><td class="num">${quantity}</td><td class="num">$${amount.toFixed(2)}</td></tr>`;
-      }).join('');
-      const total=orders.reduce((sum,order)=>sum+getOrderTotals(order).amount,0);
-      const invoiceHTML=`<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8" />
-<title>发票打印 - ${escapeHTML(dateStr)}</title>
-<style>
-*{box-sizing:border-box;}
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:0;background:#f5f5f5;line-height:1.5;color:#111827;}
-.page{max-width:420px;margin:0 auto;padding:24px 18px;background:#fff;min-height:100vh;}
-h1{font-size:22px;margin:0 0 12px;}
-.meta{font-size:13px;color:#4b5563;margin-bottom:18px;}
-table{width:100%;border-collapse:collapse;border-radius:12px;overflow:hidden;}
-th,td{border:1px solid #e5e7eb;padding:10px 8px;text-align:left;font-size:13px;}
-.num{text-align:right;}
-tfoot td{font-weight:600;}
-@media (max-width:480px){
-  .page{padding:20px 14px;}
-  h1{font-size:20px;}
-  .meta{font-size:12px;}
-  th,td{padding:8px 6px;font-size:12px;}
-}
-@media print{
-  body{background:#fff;}
-  .page{max-width:none;padding:0;}
-}
-</style>
-</head>
-<body>
-  <div class="page">
-    <h1>🧾 外卖发票</h1>
-    <div class="meta">
-      <div>开票日期：${escapeHTML(dateStr)}</div>
-      <div>${summaryStr?`汇总：${escapeHTML(summaryStr)}`:''}</div>
-    </div>
-    <table>
-      <thead><tr><th>序号</th><th>菜品</th><th>备注</th><th>数量</th><th>金额</th></tr></thead>
-      <tbody>${rows}</tbody>
-      <tfoot><tr><td colspan="4" class="num">合计</td><td class="num">$${total.toFixed(2)}</td></tr></tfoot>
-    </table>
-  </div>
-</body>
-</html>`;
-      const printWin=window.open('','_blank','noopener=yes');
-      if(!printWin){ alert('请允许浏览器弹出窗口以打印发票'); return; }
-      printWin.document.write(invoiceHTML);
-      printWin.document.close();
-      printWin.focus();
-      setTimeout(()=>printWin.print(),100);
+        totalAmount+=amount;
+        addText(`序号 ${order.id} · 数量 ${quantity} · 金额 $${amount.toFixed(2)}`,styles.orderTitle);
+        order.items.forEach(item=>{
+          addText(`- ${item.name} ×${item.qty} · $${item.price.toFixed(2)}`,styles.item);
+        });
+        if(order.remark){
+          addText(`备注：${order.remark}`,styles.remark);
+        }
+        addSpace(24);
+      });
+      addText(`合计：$${totalAmount.toFixed(2)}`,styles.total);
+      const canvas=document.createElement('canvas');
+      canvas.width=width;
+      canvas.height=Math.ceil(paddingY*2+contentHeight);
+      const ctx=canvas.getContext('2d');
+      ctx.fillStyle='#ffffff';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.imageSmoothingEnabled=true;
+      ctx.imageSmoothingQuality='high';
+      let y=paddingY;
+      lines.forEach(entry=>{
+        if(entry.type==='space'){
+          y+=entry.amount;
+          return;
+        }
+        ctx.font=entry.style.font;
+        ctx.fillStyle=entry.style.color;
+        ctx.fillText(entry.text,paddingX,y);
+        y+=entry.style.lineHeight;
+      });
+      const link=document.createElement('a');
+      link.href=canvas.toDataURL('image/jpeg',0.95);
+      link.download=`发票_${dateStr}.jpg`;
+      link.click();
     }
 
     document.getElementById('exportJSON').addEventListener('click', generateJSON);
     document.getElementById('exportAppleScript').addEventListener('click', exportAppleScript);
-    document.getElementById('printInvoice').addEventListener('click', printInvoice);
+    document.getElementById('printInvoice').addEventListener('click', downloadInvoiceImage);
 
-    createOrder();
-    populateOrderSelect(orders[0].id);
-    syncRemarkInput();
+    const firstOrder=createOrder();
+    setActiveOrder(firstOrder.id);
     initDateMeta();
     render();
   </script>
