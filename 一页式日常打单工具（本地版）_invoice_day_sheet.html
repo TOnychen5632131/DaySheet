@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>日常打单工具（含派餐导出与快捷指令/AppleScript）</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;max-width:980px;margin:0 auto;padding:16px;background:#fafafa;line-height:1.4}
+    h1{font-size:20px;margin:8px 0}
+    h2{font-size:16px;margin:0 0 8px}
+    .card{background:#fff;border:1px solid #e6e6e6;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,.05)}
+    .date-title{margin:4px 0 16px;color:#394150;font-size:16px;font-weight:600}
+    input,select,button{font-size:14px;padding:8px;border-radius:8px;border:1px solid #ccc}
+    table{width:100%;border-collapse:collapse;margin-top:8px}
+    th,td{border:1px solid #ddd;padding:8px;text-align:left}
+    .num{text-align:right}
+    .btn{cursor:pointer;border:none;padding:8px 12px;border-radius:8px}
+    .btn.primary{background:#0a7cff;color:#fff}
+    .btn.warn{background:#ef4444;color:#fff}
+    .toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+    .summary-text{margin:4px 0 0;color:#394150;font-size:14px;font-weight:500}
+    .muted{color:#6b7280}
+    .invoice-header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+    .invoice-meta{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;color:#4b5563;margin-bottom:8px}
+    .invoice-card table th,.invoice-card table td{font-size:13px}
+    .invoice-empty{color:#9ca3af;text-align:center;padding:16px 0}
+    .finance-card{border-color:#d1d5db;background:#f9fafb}
+    .finance-card h2{display:flex;align-items:center;gap:6px}
+    .finance-card .money{font-weight:600;color:#0f172a}
+    .finance-card small{display:block;margin-top:6px;color:#9ca3af}
+    .order-controls{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+    .order-controls select{flex:1 1 auto}
+    .order-item-list{display:flex;flex-direction:column;gap:4px;margin:0;padding:0}
+    .order-item{display:flex;align-items:center;justify-content:space-between;gap:8px;background:#f3f4f6;padding:6px 8px;border-radius:8px;font-size:13px}
+    .order-item .actions{display:flex;gap:6px}
+    .order-item .label{flex:1 1 auto}
+    .btn.tiny{padding:4px 6px;font-size:12px}
+    .order-remark{color:#4b5563;font-size:13px}
+    .order-remark.muted{color:#9ca3af}
+    @media (max-width:640px){
+      body{padding:12px}
+      .card{padding:12px}
+      .invoice-card table{font-size:13px}
+      .invoice-card table th,.invoice-card table td{font-size:12px;padding:6px}
+      .toolbar{flex-direction:column;align-items:stretch}
+      .toolbar .btn{width:100%;text-align:center}
+    }
+  </style>
+</head>
+<body>
+  <h1>日常打单工具（含派餐导出与快捷指令/AppleScript）</h1>
+  <p class="date-title" id="dateTitle"></p>
+  <div class="card" id="summaryCard">
+    <h2>今日菜品汇总</h2>
+    <p class="summary-text muted" id="summaryText">暂无菜品，添加后自动汇总。</p>
+  </div>
+  <div class="card">
+    <label>序号</label>
+    <div class="order-controls">
+      <select id="orderSelect"></select>
+      <button class="btn" type="button" id="newOrder">+ 新建序号</button>
+    </div>
+    <label>备注（选填，当前序号）</label>
+    <input id="orderRemark" placeholder="例如：加辣 / 不要香菜" />
+    <label>菜名（可选择或自行输入）</label>
+    <input list="presetItems" id="itemName" placeholder="例如：不辣三拼或自定义菜名" />
+    <datalist id="presetItems">
+      <option value="不辣三拼" data-price="15.99">不辣三拼（15.99）</option>
+      <option value="辣三拼" data-price="15.99">辣三拼（15.99）</option>
+      <option value="水煮鱼套餐" data-price="18.99">水煮鱼套餐（18.99）</option>
+    </datalist>
+    <label>单价（USD 税后）</label>
+    <input id="itemPrice" type="number" step="0.01" />
+    <label>数量</label>
+    <input id="itemQty" type="number" min="1" value="1" />
+    <button class="btn primary" id="addItem">+ 添加</button>
+  </div>
+  <div class="card">
+    <table>
+      <thead><tr><th>序号</th><th>菜品</th><th>备注</th><th>数量</th><th>金额</th><th>操作</th></tr></thead>
+      <tbody id="itemsBody"></tbody>
+      <tfoot><tr><td colspan="4" class="num">合计</td><td class="num" id="grandTotal">$0.00</td><td></td></tr></tfoot>
+    </table>
+    <div class="toolbar">
+      <button class="btn primary" id="exportJSON">导出派餐到快捷指令 (.json)</button>
+      <button class="btn primary" id="exportAppleScript">导出到 macOS 提醒事项（AppleScript）</button>
+      <button class="btn primary" id="printInvoice">🧾 打印发票</button>
+      <button class="btn warn" id="clearAll">清空</button>
+    </div>
+  </div>
+  <div class="card finance-card" id="financeCard" style="display:none">
+    <h2>内部结算</h2>
+    <p>佣金 (15%)：<span class="money" id="commissionAmount">$0.00</span></p>
+    <p>转老板金额：<span class="money" id="netAmount">$0.00</span></p>
+    <small>仅自己查看，不会出现在发票中</small>
+  </div>
+  <div class="card invoice-card" id="invoiceCard">
+    <div class="invoice-header">
+      <h2>🧾 发票预览</h2>
+    </div>
+    <div class="invoice-meta">
+      <span id="invoiceDate"></span>
+      <span id="invoiceSummary" class="muted"></span>
+    </div>
+    <table>
+      <thead><tr><th>序号</th><th>菜品</th><th>备注</th><th>数量</th><th>金额</th></tr></thead>
+      <tbody id="invoiceItemsBody"></tbody>
+      <tfoot><tr><td colspan="4" class="num">合计</td><td class="num" id="invoiceTotal">$0.00</td></tr></tfoot>
+    </table>
+  </div>
+
+  <script>
+    const orders=[];
+    let orderSeq=1;
+    const COMMISSION_RATE=0.15;
+    const $=s=>document.querySelector(s);
+    const fmtDate=d=>`${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}-${d.getFullYear()}`;
+    const displayDate=()=>new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'});
+    const escapeHTML=str=>str.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    function initDateMeta(){
+      const dateStr=displayDate();
+      $('#dateTitle').textContent=`今日开单：${dateStr}`;
+      $('#invoiceDate').textContent=`开票日期：${dateStr}`;
+      document.title=`日常打单工具（含派餐导出与快捷指令/AppleScript） - ${dateStr}`;
+    }
+
+    function createOrder(){
+      const order={id:orderSeq++, remark:'', items:[]};
+      orders.push(order);
+      return order;
+    }
+
+    function findOrderById(rawId){
+      const id=Number(rawId);
+      return orders.find(order=>order.id===id)||null;
+    }
+
+    function getSelectedOrder(){
+      const select=$('#orderSelect');
+      if(!select||!select.value){ return orders[0]||null; }
+      return findOrderById(select.value);
+    }
+
+    function populateOrderSelect(preferredId){
+      const select=$('#orderSelect');
+      if(!select)return;
+      select.innerHTML=orders.map(order=>`<option value="${order.id}">序号 ${order.id}</option>`).join('');
+      if(!orders.length){
+        select.value='';
+        $('#orderRemark').value='';
+        return;
+      }
+      const fallback=orders[orders.length-1].id;
+      const targetId=orders.some(order=>order.id===preferredId)?preferredId:fallback;
+      select.value=String(targetId);
+      syncRemarkInput();
+    }
+
+    function syncRemarkInput(){
+      const remarkInput=$('#orderRemark');
+      if(!remarkInput)return;
+      const order=getSelectedOrder();
+      remarkInput.value=order?order.remark:'';
+    }
+
+    function getOrderTotals(order){
+      const quantity=order.items.reduce((sum,item)=>sum+item.qty,0);
+      const amount=order.items.reduce((sum,item)=>sum+item.price*item.qty,0);
+      return {quantity,amount};
+    }
+
+    function getSummaryString(){
+      const counter=new Map();
+      orders.forEach(order=>{
+        order.items.forEach(item=>{
+          counter.set(item.name,(counter.get(item.name)||0)+item.qty);
+        });
+      });
+      if(!counter.size)return '';
+      return Array.from(counter.entries()).map(([name,qty])=>`${name} ×${qty}`).join(' / ');
+    }
+
+    function buildSequenceTasks(){
+      const results=[];
+      orders.forEach(order=>{
+        const totalUnits=order.items.reduce((sum,item)=>sum+item.qty,0);
+        if(totalUnits===0)return;
+        let cursor=1;
+        order.items.forEach(item=>{
+          for(let i=0;i<item.qty;i++){
+            let label=totalUnits>1?`${order.id}. ${cursor}/${totalUnits} ${item.name}`:`${order.id}. ${item.name}`;
+            if(order.remark){
+              label+=`（${order.remark}）`;
+            }
+            results.push({
+              label,
+              sequence:order.id,
+              item:item.name,
+              price:item.price,
+              remark:order.remark,
+              index:cursor,
+              total:totalUnits
+            });
+            cursor++;
+          }
+        });
+      });
+      return results;
+    }
+
+    $('#presetItems').addEventListener('change',()=>{
+      const val=$('#itemName').value.trim();
+      const opt=[...$('#presetItems').options].find(option=>option.value===val);
+      if(opt){ $('#itemPrice').value=opt.getAttribute('data-price'); }
+    });
+
+    $('#itemName').addEventListener('input',()=>{
+      const val=$('#itemName').value.trim();
+      const options=$('#presetItems').options;
+      let found=null;
+      for(const opt of options){ if(opt.value===val){found=opt;break;} }
+      if(found){ $('#itemPrice').value=found.getAttribute('data-price'); }
+    });
+
+    function render(){
+      const body=$('#itemsBody');
+      if(!body)return;
+      body.innerHTML='';
+      let total=0;
+      orders.forEach(order=>{
+        const {quantity,amount}=getOrderTotals(order);
+        total+=amount;
+        const detailHTML=order.items.length
+          ? `<div class="order-item-list">${
+              order.items.map((item,idx)=>{
+                const safeName=escapeHTML(item.name);
+                return `<div class="order-item"><span class="label">${safeName}</span><span class="num">×${item.qty} · $${item.price.toFixed(2)}</span><div class="actions"><button type="button" class="btn tiny del-item" data-order="${order.id}" data-item="${idx}">删除</button></div></div>`;
+              }).join('')
+            }</div>`
+          : `<span class="muted">暂无菜品</span>`;
+        const remarkClass=order.remark?'order-remark':'order-remark muted';
+        const remarkText=order.remark?escapeHTML(order.remark):'—';
+        const tr=document.createElement('tr');
+        tr.innerHTML=`<td>${order.id}</td><td>${detailHTML}</td><td><span class="${remarkClass}">${remarkText}</span></td><td class="num">${quantity}</td><td class="num">$${amount.toFixed(2)}</td><td><button type="button" class="btn warn del-order" data-order="${order.id}">删除序号</button></td>`;
+        body.appendChild(tr);
+      });
+      $('#grandTotal').textContent=`$${total.toFixed(2)}`;
+      updateSummary(total);
+    }
+
+    document.body.addEventListener('click',e=>{
+      if(e.target.classList.contains('del-item')){
+        const orderId=Number(e.target.dataset.order);
+        const itemIndex=Number(e.target.dataset.item);
+        const targetOrder=findOrderById(orderId);
+        if(targetOrder){
+          targetOrder.items.splice(itemIndex,1);
+          render();
+        }
+      }
+      if(e.target.classList.contains('del-order')){
+        const orderId=Number(e.target.dataset.order);
+        const idx=orders.findIndex(order=>order.id===orderId);
+        if(idx>-1 && confirm(`确定删除序号 ${orderId} 及其菜品吗？`)){
+          orders.splice(idx,1);
+          if(!orders.length){
+            const order=createOrder();
+            populateOrderSelect(order.id);
+          }else{
+            const nextOrder=orders[Math.min(idx,orders.length-1)];
+            populateOrderSelect(nextOrder.id);
+          }
+          render();
+        }
+      }
+    });
+
+    $('#addItem').onclick=()=>{
+      const order=getSelectedOrder();
+      if(!order){ alert('请先新建序号'); return; }
+      const name=$('#itemName').value.trim();
+      const price=Number($('#itemPrice').value)||0;
+      const qty=Math.max(1,Number($('#itemQty').value)||1);
+      if(!name)return alert('请选择或输入菜名');
+      order.items.push({name,price,qty});
+      $('#itemName').value='';
+      $('#itemPrice').value='';
+      $('#itemQty').value=1;
+      render();
+    };
+
+    $('#newOrder').addEventListener('click',()=>{
+      const order=createOrder();
+      populateOrderSelect(order.id);
+      $('#orderRemark').focus();
+      render();
+    });
+
+    $('#orderSelect').addEventListener('change',()=>{
+      syncRemarkInput();
+    });
+
+    $('#orderRemark').addEventListener('input',e=>{
+      const order=getSelectedOrder();
+      if(order){
+        order.remark=e.target.value.trim();
+        render();
+        e.target.value=order.remark;
+      }
+    });
+
+    $('#clearAll').onclick=()=>{
+      if(!confirm('确定清空全部序号与菜品？'))return;
+      orders.length=0;
+      orderSeq=1;
+      const order=createOrder();
+      populateOrderSelect(order.id);
+      render();
+    };
+
+    function updateSummary(total){
+      initDateMeta();
+      const summaryEl=$('#summaryText');
+      const invoiceSummaryEl=$('#invoiceSummary');
+      const invoiceBody=$('#invoiceItemsBody');
+      const invoiceTotalEl=$('#invoiceTotal');
+      const financeCard=$('#financeCard');
+      const commissionEl=$('#commissionAmount');
+      const netEl=$('#netAmount');
+      const hasItems=orders.some(order=>order.items.length);
+      if(!hasItems){
+        summaryEl.textContent='暂无菜品，添加后自动汇总。';
+        summaryEl.classList.add('muted');
+        invoiceSummaryEl.textContent='暂无菜品';
+        invoiceBody.innerHTML=`<tr><td colspan="5" class="invoice-empty">暂无菜品</td></tr>`;
+        invoiceTotalEl.textContent='$0.00';
+        financeCard.style.display='none';
+        return;
+      }
+      const summaryStr=getSummaryString();
+      summaryEl.textContent=summaryStr;
+      summaryEl.classList.remove('muted');
+      invoiceSummaryEl.textContent=`汇总：${summaryStr}`;
+      invoiceBody.innerHTML='';
+      orders.forEach(order=>{
+        if(!order.items.length)return;
+        const {quantity,amount}=getOrderTotals(order);
+        const detailHTML=order.items.map(item=>`<div>${escapeHTML(item.name)} ×${item.qty}</div>`).join('');
+        const remarkText=order.remark?escapeHTML(order.remark):'—';
+        const row=document.createElement('tr');
+        row.innerHTML=`<td>${order.id}</td><td>${detailHTML}</td><td>${remarkText}</td><td class="num">${quantity}</td><td class="num">$${amount.toFixed(2)}</td>`;
+        invoiceBody.appendChild(row);
+      });
+      invoiceTotalEl.textContent=`$${total.toFixed(2)}`;
+      const commission=total*COMMISSION_RATE;
+      const net=total-commission;
+      commissionEl.textContent=`$${commission.toFixed(2)}`;
+      netEl.textContent=`$${net.toFixed(2)}`;
+      financeCard.style.display='block';
+    }
+
+    function generateJSON(){
+      const tasks=buildSequenceTasks();
+      if(!tasks.length){ alert('暂无菜品'); return; }
+      const now=new Date();
+      const dateStr=fmtDate(now);
+      const exportData={
+        date:dateStr,
+        generatedAt:now.toISOString(),
+        orders:orders.filter(order=>order.items.length).map(order=>{
+          const {quantity,amount}=getOrderTotals(order);
+          return {
+            sequence:order.id,
+            remark:order.remark,
+            totalQuantity:quantity,
+            totalAmount:amount,
+            items:order.items.map(item=>({
+              name:item.name,
+              price:item.price,
+              quantity:item.qty
+            }))
+          };
+        }),
+        tasks:tasks.map(task=>({
+          task:task.label,
+          sequence:task.sequence,
+          item:task.item,
+          price:task.price,
+          index:task.index,
+          total:task.total,
+          remark:task.remark,
+          created:now.toISOString()
+        }))
+      };
+      const blob=new Blob([JSON.stringify(exportData,null,2)],{type:'application/json;charset=utf-8'});
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download=`派餐清单_${dateStr}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    function exportAppleScript(){
+      const tasks=buildSequenceTasks();
+      if(!tasks.length){ alert('暂无菜品'); return; }
+      const listName='派餐清单';
+      const esc=s=>s.replace(/\\/g,'\\\\').replace(/"/g,'\\"');
+      const applescript=`-- 生成于网页：日常打单工具
+set theListName to "${esc(listName)}"
+tell application "Reminders"
+\tif not (exists list theListName) then
+\t\tmake new list with properties {name:theListName}
+\tend if
+\tset targetList to list theListName
+\trepeat with t in {${tasks.map(t=>`\"${esc(t.label)}\"`).join(', ')}}
+\t\tmake new reminder at end of reminders of targetList with properties {name:(t as text)}
+\tend repeat
+\tactivate
+end tell
+display dialog "已创建 ${tasks.length} 条提醒到【${esc(listName)}】" buttons {"好"} default button 1`;
+      const blob=new Blob([applescript],{type:'text/plain;charset=utf-8'});
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      const now=new Date();
+      const dateStr=fmtDate(now);
+      a.download=`派餐清单_${dateStr}.applescript`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    function printInvoice(){
+      const tasks=buildSequenceTasks();
+      if(!tasks.length){ alert('暂无菜品'); return; }
+      const dateStr=displayDate();
+      const summaryStr=getSummaryString();
+      const rows=orders.map(order=>{
+        if(!order.items.length)return '';
+        const {quantity,amount}=getOrderTotals(order);
+        const detail=order.items.map(item=>`${escapeHTML(item.name)} ×${item.qty} · $${item.price.toFixed(2)}`).join('<br>');
+        const remark=order.remark?escapeHTML(order.remark):'—';
+        return `<tr><td>${order.id}</td><td>${detail}</td><td>${remark}</td><td class="num">${quantity}</td><td class="num">$${amount.toFixed(2)}</td></tr>`;
+      }).join('');
+      const total=orders.reduce((sum,order)=>sum+getOrderTotals(order).amount,0);
+      const invoiceHTML=`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>发票打印 - ${escapeHTML(dateStr)}</title>
+<style>
+*{box-sizing:border-box;}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:0;background:#f5f5f5;line-height:1.5;color:#111827;}
+.page{max-width:420px;margin:0 auto;padding:24px 18px;background:#fff;min-height:100vh;}
+h1{font-size:22px;margin:0 0 12px;}
+.meta{font-size:13px;color:#4b5563;margin-bottom:18px;}
+table{width:100%;border-collapse:collapse;border-radius:12px;overflow:hidden;}
+th,td{border:1px solid #e5e7eb;padding:10px 8px;text-align:left;font-size:13px;}
+.num{text-align:right;}
+tfoot td{font-weight:600;}
+@media (max-width:480px){
+  .page{padding:20px 14px;}
+  h1{font-size:20px;}
+  .meta{font-size:12px;}
+  th,td{padding:8px 6px;font-size:12px;}
+}
+@media print{
+  body{background:#fff;}
+  .page{max-width:none;padding:0;}
+}
+</style>
+</head>
+<body>
+  <div class="page">
+    <h1>🧾 外卖发票</h1>
+    <div class="meta">
+      <div>开票日期：${escapeHTML(dateStr)}</div>
+      <div>${summaryStr?`汇总：${escapeHTML(summaryStr)}`:''}</div>
+    </div>
+    <table>
+      <thead><tr><th>序号</th><th>菜品</th><th>备注</th><th>数量</th><th>金额</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="4" class="num">合计</td><td class="num">$${total.toFixed(2)}</td></tr></tfoot>
+    </table>
+  </div>
+</body>
+</html>`;
+      const printWin=window.open('','_blank','noopener=yes');
+      if(!printWin){ alert('请允许浏览器弹出窗口以打印发票'); return; }
+      printWin.document.write(invoiceHTML);
+      printWin.document.close();
+      printWin.focus();
+      setTimeout(()=>printWin.print(),100);
+    }
+
+    document.getElementById('exportJSON').addEventListener('click', generateJSON);
+    document.getElementById('exportAppleScript').addEventListener('click', exportAppleScript);
+    document.getElementById('printInvoice').addEventListener('click', printInvoice);
+
+    createOrder();
+    populateOrderSelect(orders[0].id);
+    syncRemarkInput();
+    initDateMeta();
+    render();
+  </script>
+</body>
+</html>
